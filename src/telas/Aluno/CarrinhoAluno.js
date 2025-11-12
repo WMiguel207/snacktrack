@@ -1,210 +1,129 @@
-import React, { useState, useEffect } from "react";
-import {
-  View,
-  Text,
-  StyleSheet,
-  TouchableOpacity,
-  SafeAreaView,
-  FlatList,
-  Alert,
-  ActivityIndicator,
-} from "react-native";
-import { useNavigation } from "@react-navigation/native";
-import { MaterialIcons as Icon } from "@expo/vector-icons";
-import AsyncStorage from "@react-native-async-storage/async-storage";
+import React, { useState } from "react";
+import { View, Text, TouchableOpacity, Modal, StyleSheet, Alert } from "react-native";
+import { Calendar } from "react-native-calendars";
+import { Picker } from "@react-native-picker/picker";
+import { auth, db } from "../../../components/firebaseConfig";
+import { doc, getDoc, setDoc } from "firebase/firestore";
 
-export default function Carrinho() {
-  const navigation = useNavigation();
-  const [itens, setItens] = useState([]);
-  const [loading, setLoading] = useState(true);
+const ModalReserva = ({ modalVisible, setModalVisible, selectedPrato, salvarReserva }) => {
+  const [selectedDate, setSelectedDate] = useState(null);
+  const [selectedHour, setSelectedHour] = useState("12:00");
 
-  // Carrega o carrinho sempre que a tela ganha foco
-  useEffect(() => {
-    const carregarCarrinho = async () => {
-      try {
-        setLoading(true);
-        const jsonValue = await AsyncStorage.getItem("carrinho");
-        const carrinho = jsonValue ? JSON.parse(jsonValue) : [];
-        setItens(carrinho);
-      } catch (error) {
-        console.error("Erro ao carregar carrinho:", error);
-      } finally {
-        setLoading(false);
-      }
-    };
-
-    const unsubscribe = navigation.addListener("focus", carregarCarrinho);
-    return unsubscribe;
-  }, [navigation]);
-
-  const limparCarrinho = async () => {
-    Alert.alert("Esvaziar carrinho", "Deseja remover todos os itens?", [
-      { text: "Cancelar", style: "cancel" },
-      {
-        text: "Confirmar",
-        style: "destructive",
-        onPress: async () => {
-          await AsyncStorage.removeItem("carrinho");
-          setItens([]);
-          Alert.alert("Carrinho limpo", "Todos os itens foram removidos!");
-        },
-      },
-    ]);
-  };
-
-  const formatarPreco = (preco) => {
-    if (!preco) return "R$ 0,00";
-    if (typeof preco === "number") return `R$ ${preco.toFixed(2)}`;
-    const valor = parseFloat(preco.replace("R$", "").replace(",", ".")) || 0;
-    return `R$ ${valor.toFixed(2)}`;
-  };
-
-  const calcularTotal = () => {
-    return itens.reduce((total, item) => {
-      const preco = parseFloat(
-        item.preco?.toString().replace("R$", "").replace(",", ".")
-      ) || 0;
-      return total + preco;
-    }, 0);
-  };
-
-  const gerarCodigoReserva = () => {
-    const timestamp = Date.now().toString();
-    return timestamp.slice(-6); // últimos 6 dígitos
-  };
-
-  const salvarReserva = async (reserva) => {
-    try {
-      const armazenadas = await AsyncStorage.getItem("reservas");
-      const reservas = armazenadas ? JSON.parse(armazenadas) : [];
-      reservas.push(reserva);
-      await AsyncStorage.setItem("reservas", JSON.stringify(reservas));
-    } catch (error) {
-      console.error("Erro ao salvar reserva:", error);
-    }
-  };
-
-  const handleReservar = async () => {
-    if (itens.length === 0) {
-      navigation.navigate("InicioAluno");
+  const handleConfirmar = async () => {
+    if (!selectedDate) {
+      Alert.alert("Selecione uma data");
       return;
     }
 
-    try {
-      const codigo = gerarCodigoReserva();
-      const reserva = {
-        codigo,
-        data: new Date().toLocaleString(),
-        itens,
-        total: formatarPreco(calcularTotal()),
-      };
-
-      await salvarReserva(reserva);
-      await AsyncStorage.removeItem("carrinho");
-      setItens([]);
-
-      Alert.alert("Reserva confirmada ✅", `Código da reserva: ${codigo}`);
-      navigation.navigate("InicioAluno");
-    } catch (error) {
-      console.error("Erro ao finalizar reserva:", error);
-      Alert.alert("Erro", "Não foi possível concluir a reserva.");
+    const usuarioUid = auth.currentUser?.uid;
+    if (!usuarioUid) {
+      Alert.alert("Usuário não autenticado.");
+      return;
     }
+
+    const dataEntrega = selectedDate;
+    const horaEntrega = selectedHour;
+
+    await salvarReserva(selectedPrato, dataEntrega, horaEntrega);
+    setModalVisible(false);
   };
 
-  const total = calcularTotal();
-
   return (
-    <SafeAreaView style={styles.container}>
-      <View style={styles.header}>
-        <TouchableOpacity onPress={() => navigation.navigate("Buscas")}>
-          <Icon name="arrow-back" size={24} color="#000" />
-        </TouchableOpacity>
-        <Text style={styles.headerTitle}>Meu Carrinho</Text>
-      </View>
+    <Modal
+      visible={modalVisible}
+      transparent
+      animationType="slide"
+      onRequestClose={() => setModalVisible(false)}
+    >
+      <View style={styles.modalContainer}>
+        <View style={styles.modalContent}>
+          <Text style={styles.modalTitle}>
+            {`Escolha a data e hora para ${selectedPrato?.nome ? String(selectedPrato.nome) : "o item"}`}
+          </Text>
 
-      <View style={styles.content}>
-        {loading ? (
-          <ActivityIndicator size="large" color="#c1372d" style={{ marginTop: 40 }} />
-        ) : itens.length === 0 ? (
-          <Text style={styles.emptyText}>Nenhum item adicionado por enquanto</Text>
-        ) : (
-          <>
-            <FlatList
-              data={itens}
-              keyExtractor={(item, index) => index.toString()}
-              renderItem={({ item }) => (
-                <View style={styles.item}>
-                  <Text style={styles.itemText}>{item.titulo || item.nome}</Text>
-                  {item.preco && <Text style={styles.itemPrice}>{formatarPreco(item.preco)}</Text>}
-                </View>
-              )}
-            />
+          {/* Calendário */}
+          <Calendar
+            minDate={new Date().toISOString().split("T")[0]}
+            onDayPress={(day) => setSelectedDate(day.dateString)}
+            style={{ marginBottom: 20 }}
+          />
 
-            <View style={styles.totalContainer}>
-              <Text style={styles.totalLabel}>Total:</Text>
-              <Text style={styles.totalValue}>{formatarPreco(total)}</Text>
-            </View>
-          </>
-        )}
+          {/* Seletor de hora */}
+          <Text style={styles.label}>Selecione o horário:</Text>
+          <View style={styles.pickerContainer}>
+            <Picker
+              selectedValue={selectedHour}
+              onValueChange={(itemValue) => setSelectedHour(itemValue)}
+              style={{ width: "100%" }}
+            >
+              <Picker.Item label="10:00" value="10:00" />
+              <Picker.Item label="11:00" value="11:00" />
+              <Picker.Item label="12:00" value="12:00" />
+              <Picker.Item label="13:00" value="13:00" />
+              <Picker.Item label="14:00" value="14:00" />
+            </Picker>
+          </View>
 
-        <TouchableOpacity
-          style={[styles.reserveButton, { opacity: loading ? 0.5 : 1 }]}
-          disabled={loading}
-          onPress={handleReservar}
-        >
-          <Text style={styles.reserveButtonText}>Reservar agora</Text>
-        </TouchableOpacity>
-
-        {itens.length > 0 && (
-          <TouchableOpacity style={styles.clearButton} onPress={limparCarrinho}>
-            <Text style={styles.clearButtonText}>Esvaziar carrinho</Text>
+          <TouchableOpacity style={styles.confirmButton} onPress={handleConfirmar}>
+            <Text style={{ color: "#fff", fontWeight: "bold" }}>Confirmar Reserva</Text>
           </TouchableOpacity>
-        )}
+
+          <TouchableOpacity
+            style={styles.modalClose}
+            onPress={() => setModalVisible(false)}
+          >
+            <Text style={{ color: "#fff", fontWeight: "bold" }}>Fechar</Text>
+          </TouchableOpacity>
+        </View>
       </View>
-    </SafeAreaView>
+    </Modal>
   );
-}
+};
+
+export default ModalReserva;
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: "#fff" },
-  header: {
-    paddingTop: 50,
-    flexDirection: "row",
-    alignItems: "center",
-    padding: 16,
-    borderBottomWidth: 1,
-    borderBottomColor: "#eee",
-  },
-  headerTitle: { fontSize: 18, fontWeight: "bold", marginLeft: 10 },
-  content: { flex: 1, paddingHorizontal: 20, paddingTop: 20 },
-  emptyText: { fontSize: 18, color: "#666", textAlign: "center", paddingTop: 300 },
-  item: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    paddingVertical: 10,
-    borderBottomWidth: 1,
-    borderBottomColor: "#eee",
-  },
-  itemText: { fontSize: 16, color: "#333" },
-  itemPrice: { fontSize: 16, fontWeight: "bold", color: "#c1372d" },
-  totalContainer: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    marginTop: 20,
-    borderTopWidth: 1,
-    borderTopColor: "#eee",
-    paddingTop: 10,
-  },
-  totalLabel: { fontSize: 16, fontWeight: "bold" },
-  totalValue: { fontSize: 16, fontWeight: "bold", color: "#c1372d" },
-  reserveButton: {
-    backgroundColor: "#c1372d",
-    paddingVertical: 12,
-    borderRadius: 25,
-    marginTop: 30,
+  modalContainer: {
+    flex: 1,
+    backgroundColor: "rgba(0, 0, 0, 0.5)",
+    justifyContent: "center",
     alignItems: "center",
   },
-  reserveButtonText: { color: "#fff", fontWeight: "bold", fontSize: 16 },
-  clearButton: { marginTop: 15, paddingVertical: 10, alignItems: "center", paddingBottom: 50 },
-  clearButtonText: { color: "#c1372d", fontWeight: "bold", fontSize: 15 },
+  modalContent: {
+    backgroundColor: "#fff",
+    padding: 25,
+    borderRadius: 16,
+    width: "85%",
+    elevation: 10,
+  },
+  modalTitle: {
+    fontSize: 18,
+    fontWeight: "bold",
+    marginBottom: 16,
+    textAlign: "center",
+  },
+  label: {
+    fontWeight: "600",
+    marginBottom: 5,
+  },
+  pickerContainer: {
+    borderWidth: 1,
+    borderColor: "#ccc",
+    borderRadius: 8,
+    marginBottom: 20,
+    overflow: "hidden",
+  },
+  confirmButton: {
+    backgroundColor: "#2e7d32",
+    padding: 12,
+    borderRadius: 8,
+    alignItems: "center",
+    marginBottom: 10,
+  },
+  modalClose: {
+    backgroundColor: "#b71c1c",
+    padding: 12,
+    borderRadius: 8,
+    alignItems: "center",
+  },
 });

@@ -14,11 +14,18 @@ import {
 import { MaterialIcons as Icon } from "@expo/vector-icons";
 import { useNavigation } from "@react-navigation/native";
 import { Calendar } from "react-native-calendars";
-import AsyncStorage from "@react-native-async-storage/async-storage";
 import { app } from "../../../components/firebaseConfig.js";
-import { getFirestore, collection, getDocs } from "firebase/firestore";
+import {
+  getFirestore,
+  collection,
+  getDocs,
+  addDoc,
+} from "firebase/firestore";
+import { getAuth } from "firebase/auth";
+import { adicionarItemAoCarrinho } from "../../../src/api/carrinhoService";
 
 const db = getFirestore(app);
+const auth = getAuth(app);
 
 export default function CardapioAluno2() {
   const navigation = useNavigation();
@@ -31,10 +38,10 @@ export default function CardapioAluno2() {
   useEffect(() => {
     const buscarCardapio = async () => {
       try {
-        const itensRef = collection(db, "cardapios"); 
-
+        const itensRef = collection(db, "cardapios");
         const snapshot = await getDocs(itensRef);
         let lista = [];
+
         snapshot.docs.forEach((doc) => {
           const data = doc.data();
           if (Array.isArray(data.itens)) {
@@ -42,7 +49,7 @@ export default function CardapioAluno2() {
               .filter((item) => item.disponivel === true && item.tipo === "dia")
               .map((item, index) => ({
                 ...item,
-                id: `${doc.id}_${index}`, // 🔑 Garante que cada item tenha um id único
+                id: `${doc.id}_${index}`, // id único
               }));
             lista = [...lista, ...itensDisponiveis];
           }
@@ -60,42 +67,71 @@ export default function CardapioAluno2() {
     buscarCardapio();
   }, []);
 
-  // 🛒 Adiciona ao carrinho local
+  // 🛒 Adiciona ao carrinho no Firebase
   const adicionarAoCarrinho = async (item) => {
     try {
-      const jsonValue = await AsyncStorage.getItem("carrinho");
-      const carrinho = jsonValue ? JSON.parse(jsonValue) : [];
-
-      const existente = carrinho.find((i) => i.id === item.id);
-      if (existente) {
-        Alert.alert("Aviso", `${item.nome} já está no carrinho.`);
+      const user = auth.currentUser;
+      if (!user) {
+        Alert.alert("Erro", "Você precisa estar logado para adicionar ao carrinho.");
         return;
       }
 
-      const novoCarrinho = [
-        ...carrinho,
+      await adicionarItemAoCarrinho(
+        user.uid,
         {
           id: item.id,
           nome: item.nome,
           preco: item.preco,
           imagem: item.imagem,
         },
-      ];
+        1
+      );
 
-      await AsyncStorage.setItem("carrinho", JSON.stringify(novoCarrinho));
       Alert.alert("✅ Adicionado", `${item.nome} foi adicionado ao carrinho!`);
     } catch (e) {
-      console.log("Erro ao adicionar item:", e);
+      console.error("Erro ao adicionar item:", e);
+      Alert.alert("Erro", "Não foi possível adicionar o item ao carrinho.");
+    }
+  };
+
+  // 📅 Modal de Reserva
+  const reservarPrato = async (prato, dataEntrega) => {
+    try {
+      const user = auth.currentUser;
+      if (!user) {
+        Alert.alert("Erro", "Você precisa estar logado para reservar.");
+        return;
+      }
+
+      const codigo = Math.floor(10000 + Math.random() * 90000).toString();
+
+      await addDoc(collection(db, "reservas"), {
+        idAluno: user.uid,
+        nomeAluno: user.displayName || "Aluno",
+        idItem: prato.id,
+        nomeItem: prato.nome,
+        preco: prato.preco,
+        dataReserva: new Date(),
+        dataEntrega,
+        status: "pendente",
+        codigoGerado: codigo,
+      });
+
+      Alert.alert(
+        "✅ Reserva confirmada",
+        `${prato.nome} reservado com código #${codigo}\nEntrega: ${dataEntrega}`,
+        [{ text: "OK", onPress: () => setModalVisible(false) }]
+      );
+    } catch (error) {
+      console.error("Erro ao salvar reserva:", error);
+      Alert.alert("Erro", "Não foi possível salvar a reserva.");
     }
   };
 
   // 🎨 Renderização de cada card
   const renderItem = ({ item }) => (
     <View style={styles.card}>
-      <TouchableOpacity
-        style={styles.btnAdd}
-        onPress={() => adicionarAoCarrinho(item)}
-      >
+      <TouchableOpacity style={styles.btnAdd} onPress={() => adicionarAoCarrinho(item)}>
         <Text style={styles.txtAdd}>+</Text>
       </TouchableOpacity>
 
@@ -158,7 +194,7 @@ export default function CardapioAluno2() {
       {/* 📅 Modal de Reserva */}
       <Modal
         visible={modalVisible}
-        transparent={true}
+        transparent
         animationType="slide"
         onRequestClose={() => setModalVisible(false)}
       >
@@ -171,20 +207,7 @@ export default function CardapioAluno2() {
             <Calendar
               minDate={new Date().toISOString().split("T")[0]}
               onDayPress={(day) => {
-                const hoje = new Date();
-                const selecionado = new Date(day.dateString);
-                const diffDays = Math.ceil(
-                  (selecionado - hoje) / (1000 * 60 * 60 * 24)
-                );
-
-                let mensagem = "";
-                if (diffDays === 0) mensagem = "Reservado para hoje";
-                else if (diffDays === 1) mensagem = "Reservado para amanhã";
-                else mensagem = `Reservado para daqui a ${diffDays} dias`;
-
-                Alert.alert("", mensagem, [
-                  { text: "OK", onPress: () => setModalVisible(false) },
-                ]);
+                reservarPrato(selectedPrato, day.dateString);
               }}
               style={{ marginBottom: 20 }}
             />

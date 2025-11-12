@@ -8,12 +8,18 @@ import {
   SafeAreaView,
   FlatList,
   Alert,
+  ActivityIndicator,
 } from "react-native";
 import { MaterialIcons as Icon } from "@expo/vector-icons";
 import FooterNav from "../../../components/FooterNav";
 import { useNavigation, useFocusEffect } from "@react-navigation/native";
-import AsyncStorage from "@react-native-async-storage/async-storage";
-import { doc, getDoc } from "firebase/firestore";
+import {
+  collection,
+  query,
+  where,
+  getDocs,
+  orderBy,
+} from "firebase/firestore";
 import { db } from "../../../components/firebaseConfig";
 import { UserContext } from "../../../components/userContext";
 
@@ -21,87 +27,75 @@ export default function PerfilAluno() {
   const navigation = useNavigation();
   const [activeTab, setActiveTab] = useState("PerfilAluno");
   const [reservas, setReservas] = useState([]);
-  const [usuario, setUsuario] = useState({
-    nome: "",
-    apelido: "",
-    email: "",
-  });
+  const [usuario, setUsuario] = useState({ nome: "", apelido: "", email: "" });
+  const [carregando, setCarregando] = useState(true);
   const { user: userContext, loading: userLoading } = useContext(UserContext);
 
   // 🔹 Carrega dados do usuário logado
   useEffect(() => {
-    const carregarUsuario = async () => {
-      if (!userContext?.uid) {
-        if (!userLoading) {
-          setUsuario({ nome: "", apelido: "", email: "" });
-        }
-        return;
-      }
-
-      // usa dados já carregados no contexto
-      setUsuario((prev) => ({
-        nome: userContext.nome ?? prev.nome,
-        apelido: userContext.apelido ?? prev.apelido,
-        email: userContext.email ?? prev.email,
-      }));
-
-      try {
-        const docRef = doc(db, "user", userContext.uid);
-        const docSnap = await getDoc(docRef);
-
-        if (docSnap.exists()) {
-          const dados = docSnap.data();
-          setUsuario({
-            nome: dados.nome || "",
-            apelido: dados.apelido || "",
-            email: userContext.email || "",
-          });
-        }
-      } catch (error) {
-        console.warn("Não foi possível carregar dados do usuário:", error);
-      }
-    };
-    carregarUsuario();
+    if (userContext?.uid && !userLoading) {
+      setUsuario({
+        nome: userContext.nome || "",
+        apelido: userContext.apelido || "",
+        email: userContext.email || "",
+      });
+    }
   }, [userContext, userLoading]);
 
-  // 🔹 Carrega reservas quando a tela é focada
+  // 🔹 Carrega reservas do Firestore quando a tela é focada
   useFocusEffect(
     useCallback(() => {
       const carregarReservas = async () => {
-        const armazenadas = await AsyncStorage.getItem("reservas");
-        const lista = armazenadas ? JSON.parse(armazenadas) : [];
-        setReservas(lista.reverse());
+        if (!userContext?.uid) return;
+
+        try {
+          setCarregando(true);
+          const reservasRef = collection(db, "reservas");
+          const q = query(reservasRef, where("usuarioUid", "==", userContext.uid));
+          const snapshot = await getDocs(q);
+
+          const lista = snapshot.docs.map((doc) => ({
+            id: doc.id,
+            ...doc.data(),
+          }));
+
+          // 🔸 Ordena: pendentes primeiro, confirmadas depois
+          const ordenadas = lista.sort((a, b) => {
+            if (a.status === b.status) return 0;
+            if (a.status === "pendente") return -1;
+            if (b.status === "pendente") return 1;
+            return 0;
+          });
+
+          setReservas(ordenadas);
+        } catch (error) {
+          console.error("Erro ao carregar reservas:", error);
+          Alert.alert("Erro", "Não foi possível carregar o histórico de reservas.");
+        } finally {
+          setCarregando(false);
+        }
       };
+
       carregarReservas();
-    }, [])
+    }, [userContext])
   );
 
-  // 🔹 Exclui reserva
-  const excluirReserva = async (codigo) => {
-    Alert.alert("Excluir código", "Tem certeza que deseja excluir este código?", [
+  // 🔹 Exclui reserva (apenas local, sem remover do Firestore)
+  const excluirReserva = async (id) => {
+    Alert.alert("Excluir código", "Deseja realmente excluir este código da lista?", [
       { text: "Cancelar", style: "cancel" },
       {
         text: "Excluir",
         style: "destructive",
-        onPress: async () => {
-          const novasReservas = reservas.filter((item) => item.codigo !== codigo);
-          setReservas(novasReservas);
-          await AsyncStorage.setItem("reservas", JSON.stringify(novasReservas));
+        onPress: () => {
+          const novas = reservas.filter((item) => item.id !== id);
+          setReservas(novas);
         },
       },
     ]);
   };
 
-  let nomeExibido = "";
-
-  if (usuario.apelido) {
-    nomeExibido = usuario.apelido;
-  } else if (usuario.nome) {
-    nomeExibido = usuario.nome;
-  } else {
-    nomeExibido = "Usuário";
-  }
-
+  const nomeExibido = usuario.apelido || usuario.nome || "Usuário";
 
   return (
     <SafeAreaView style={styles.container}>
@@ -117,28 +111,41 @@ export default function PerfilAluno() {
       <View style={styles.section}>
         <Text style={styles.sectionTitle}>Histórico de Códigos</Text>
 
-        {reservas.length === 0 ? (
+        {carregando ? (
+          <ActivityIndicator size="large" color="#c1372d" />
+        ) : reservas.length === 0 ? (
           <Text style={styles.emptyText}>Nenhuma reserva encontrada</Text>
         ) : (
           <FlatList
             data={reservas}
-            keyExtractor={(item) => item.codigo}
+            keyExtractor={(item) => item.id}
             renderItem={({ item }) => (
               <View style={styles.card}>
                 <View style={styles.cardHeader}>
                   <Text style={styles.codigo}>Código: {item.codigo}</Text>
-                  <TouchableOpacity onPress={() => excluirReserva(item.codigo)}>
-                    <Icon name="delete" size={24} color="#c00" />
+                  <TouchableOpacity onPress={() => excluirReserva(item.id)}>
+                    <Icon name="delete" size={22} color="#c00" />
                   </TouchableOpacity>
                 </View>
-                <Text>Data: {item.data}</Text>
-                <Text>Total: {item.total}</Text>
+
+                <Text>Status: {item.status || "pendente"}</Text>
+                <Text>Data: {item.data || "—"}</Text>
+                <Text>
+  Total:{" "}
+  {item.total
+    ? item.total.toLocaleString("pt-BR", {
+        style: "currency",
+        currency: "BRL",
+      })
+    : "—"}
+</Text>
                 <Text style={styles.subtitulo}>Itens:</Text>
-                {item.itens.map((i, index) => (
-                  <Text key={index} style={styles.itemText}>
-                    • {i.titulo || i.nome}
-                  </Text>
-                ))}
+                {Array.isArray(item.itens) &&
+                  item.itens.map((i, index) => (
+                    <Text key={index} style={styles.itemText}>
+                      • {i.titulo || i.nome}
+                    </Text>
+                  ))}
               </View>
             )}
           />

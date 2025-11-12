@@ -20,11 +20,10 @@ import {
   collection,
   getDocs,
   addDoc,
-  doc,
-  setDoc,
 } from "firebase/firestore";
 import { getAuth } from "firebase/auth";
 import { app } from "../../../components/firebaseConfig.js";
+import { adicionarItemAoCarrinho } from "../../../src/api/carrinhoService";
 
 const db = getFirestore(app);
 const auth = getAuth(app);
@@ -46,11 +45,9 @@ export default function CardapioAluno() {
         return;
       }
 
-      // Pega o cardápio mais recente
       const cardapios = snapshot.docs.map((doc) => doc.data());
       const cardapioMaisRecente = cardapios.sort((a, b) => b.data - a.data)[0];
 
-      // 🔹 Filtra apenas itens disponíveis OU do tipo "semanal"
       const itensFiltrados = (cardapioMaisRecente.itens || []).filter(
         (item) => item.disponivel === true && item.tipo === "semana"
       );
@@ -122,32 +119,13 @@ export default function CardapioAluno() {
         return;
       }
 
-      const carrinhoRef = doc(db, "carrinhos", user.uid);
-      const snapshot = await getDocs(collection(db, "carrinhos"));
-      let carrinhoAtual = [];
-
-      try {
-        const carrinhoSnap = await getDocs(collection(db, "carrinhos"));
-        carrinhoSnap.forEach((doc) => {
-          if (doc.id === user.uid) {
-            carrinhoAtual = doc.data().itens || [];
-          }
-        });
-      } catch (e) {
-        console.log("Carrinho vazio");
-      }
-
-      carrinhoAtual.push({
-        idItem: item.idItem || item.id,
+      // Adiciona item ao carrinho usando o novo serviço
+      await adicionarItemAoCarrinho(user.uid, {
+        id: item.idItem || item.id,
         nome: item.nome,
         preco: item.preco,
-        quantidade: 1,
-      });
-
-      await setDoc(carrinhoRef, {
-        itens: carrinhoAtual,
-        total: carrinhoAtual.reduce((acc, i) => acc + parseFloat(i.preco), 0),
-      });
+        imagem: item.imagem,
+      }, 1);
 
       Alert.alert("✅ Adicionado ao carrinho", `${item.nome} foi adicionado!`);
     } catch (error) {
