@@ -40,17 +40,20 @@ export default function BuscaAluno() {
     const fetchItens = async () => {
       try {
         const querySnapshot = await getDocs(collection(db, "cardapios"));
-        const fetched = querySnapshot.docs.flatMap((docSnapshot) => {
-          const data = docSnapshot.data();
-          if (!Array.isArray(data.itens)) return [];
+        if (querySnapshot.empty) {
+          setItens([]);
+          setLoading(false);
+          return;
+        }
 
-          return data.itens
-            .filter((item) => item.disponivel === true && item.tipo === "avulso")
-            .map((item, index) => ({
-              ...item,
-              id: `${docSnapshot.id}_${index}`,
-            }));
-        });
+        // Agora cada item é um documento individual
+        const fetched = querySnapshot.docs
+          .map((docSnapshot) => ({
+            id: docSnapshot.id,
+            ...docSnapshot.data(),
+          }))
+          .filter((item) => item.disponivel === true && item.tipo === "avulso");
+
         setItens(fetched);
       } catch (error) {
         console.error("Erro ao buscar itens:", error);
@@ -58,6 +61,7 @@ export default function BuscaAluno() {
         setLoading(false);
       }
     };
+
     fetchItens();
   }, []);
 
@@ -176,7 +180,12 @@ export default function BuscaAluno() {
               {item.imagem ? (
                 <Image source={{ uri: item.imagem }} style={styles.productImage} />
               ) : (
-                <View style={[styles.productImage, { backgroundColor: '#e0e0e0', justifyContent: 'center', alignItems: 'center' }]}>
+                <View
+                  style={[
+                    styles.productImage,
+                    { backgroundColor: '#e0e0e0', justifyContent: 'center', alignItems: 'center' },
+                  ]}
+                >
                   <Text style={styles.productImageText}>📷</Text>
                 </View>
               )}

@@ -17,7 +17,7 @@ import { Calendar } from "react-native-calendars";
 import { app } from "../../../components/firebaseConfig.js";
 import {
   getFirestore,
-  collection,
+  collectionGroup,
   getDocs,
   addDoc,
 } from "firebase/firestore";
@@ -34,26 +34,23 @@ export default function CardapioAluno2() {
   const [itens, setItens] = useState([]);
   const [loading, setLoading] = useState(true);
 
-  // 🔥 Busca no Firestore
+  // 🔥 Busca correta no Firestore (para subcoleções "cardapios")
   useEffect(() => {
     const buscarCardapio = async () => {
       try {
-        const itensRef = collection(db, "cardapios");
-        const snapshot = await getDocs(itensRef);
-        let lista = [];
+        const snapshot = await getDocs(collectionGroup(db, "cardapios"));
+        if (snapshot.empty) {
+          Alert.alert("Aviso", "Nenhum cardápio disponível no momento.");
+          setItens([]);
+          return;
+        }
 
-        snapshot.docs.forEach((doc) => {
-          const data = doc.data();
-          if (Array.isArray(data.itens)) {
-            const itensDisponiveis = data.itens
-              .filter((item) => item.disponivel === true && item.tipo === "dia")
-              .map((item, index) => ({
-                ...item,
-                id: `${doc.id}_${index}`, // id único
-              }));
-            lista = [...lista, ...itensDisponiveis];
-          }
-        });
+        const lista = snapshot.docs
+          .map((doc) => ({
+            id: doc.id,
+            ...doc.data(),
+          }))
+          .filter((item) => item.disponivel === true && item.tipo === "dia");
 
         setItens(lista);
       } catch (e) {

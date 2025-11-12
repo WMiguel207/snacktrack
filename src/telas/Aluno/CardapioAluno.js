@@ -14,10 +14,11 @@ import {
 import { MaterialIcons as Icon } from "@expo/vector-icons";
 import { useNavigation } from "@react-navigation/native";
 import { Calendar } from "react-native-calendars";
+import { Picker } from "@react-native-picker/picker";
 import FooterNav from "../../../components/FooterNav";
 import {
   getFirestore,
-  collection,
+  collectionGroup,
   getDocs,
   addDoc,
 } from "firebase/firestore";
@@ -31,28 +32,33 @@ const auth = getAuth(app);
 export default function CardapioAluno() {
   const [modalVisible, setModalVisible] = useState(false);
   const [selectedPrato, setSelectedPrato] = useState(null);
+  const [selectedDate, setSelectedDate] = useState(null);
+  const [selectedHour, setSelectedHour] = useState("");
   const [activeTab, setActiveTab] = useState("Cardapio");
   const [pratos, setPratos] = useState([]);
   const [loading, setLoading] = useState(true);
   const navigation = useNavigation();
 
+  // 🔹 Busca todos os documentos (inclusive de subcoleções chamadas "cardapios")
   const fetchCardapio = async () => {
     try {
-      const snapshot = await getDocs(collection(db, "cardapios"));
+      const snapshot = await getDocs(collectionGroup(db, "cardapios"));
+
       if (snapshot.empty) {
         Alert.alert("Aviso", "Nenhum cardápio disponível no momento.");
         setPratos([]);
         return;
       }
 
-      const cardapios = snapshot.docs.map((doc) => doc.data());
-      const cardapioMaisRecente = cardapios.sort((a, b) => b.data - a.data)[0];
+      const itens = snapshot.docs.map((doc) => ({
+        id: doc.id,
+        ...doc.data(),
+      }));
 
-      const itensFiltrados = (cardapioMaisRecente.itens || []).filter(
+      const itensFiltrados = itens.filter(
         (item) => item.disponivel === true && item.tipo === "semana"
       );
 
-      // Verifica se após o filtro não há itens disponíveis
       if (itensFiltrados.length === 0) {
         Alert.alert("Aviso", "Nenhum cardápio disponível no momento.");
         setPratos([]);
@@ -72,17 +78,19 @@ export default function CardapioAluno() {
     fetchCardapio();
   }, []);
 
-  // 🔹 Gera código da reserva
-  const gerarCodigo = () => {
-    return Math.floor(10000 + Math.random() * 90000).toString();
-  };
+  const gerarCodigo = () => Math.floor(10000 + Math.random() * 90000).toString();
 
-  // 🔹 Salva reserva no Firestore
-  const salvarReserva = async (prato, dataEntrega) => {
+  // 🔹 Salva reserva com data e hora
+  const salvarReserva = async (prato, dataEntrega, horaEntrega) => {
     try {
       const user = auth.currentUser;
       if (!user) {
         Alert.alert("Erro", "Você precisa estar logado para reservar.");
+        return;
+      }
+
+      if (!dataEntrega || !horaEntrega) {
+        Alert.alert("Aviso", "Selecione data e horário antes de confirmar.");
         return;
       }
 
@@ -91,18 +99,19 @@ export default function CardapioAluno() {
       await addDoc(collection(db, "reservas"), {
         idAluno: user.uid,
         nomeAluno: user.displayName || "Aluno",
-        idItem: prato.idItem || prato.id,
+        idItem: prato.id,
         nomeItem: prato.nome,
         preco: prato.preco,
         dataReserva: new Date(),
         dataEntrega,
+        horaEntrega,
         status: "pendente",
         codigoGerado: codigo,
       });
 
       Alert.alert(
         "✅ Reserva confirmada",
-        `${prato.nome} reservado com código #${codigo}\nEntrega: ${dataEntrega}`,
+        `${prato.nome} reservado com código #${codigo}\nEntrega: ${dataEntrega} às ${horaEntrega}`,
         [{ text: "OK", onPress: () => setModalVisible(false) }]
       );
     } catch (error) {
@@ -119,13 +128,16 @@ export default function CardapioAluno() {
         return;
       }
 
-      // Adiciona item ao carrinho usando o novo serviço
-      await adicionarItemAoCarrinho(user.uid, {
-        id: item.idItem || item.id,
-        nome: item.nome,
-        preco: item.preco,
-        imagem: item.imagem,
-      }, 1);
+      await adicionarItemAoCarrinho(
+        user.uid,
+        {
+          id: item.id,
+          nome: item.nome,
+          preco: item.preco,
+          imagem: item.imagem,
+        },
+        1
+      );
 
       Alert.alert("✅ Adicionado ao carrinho", `${item.nome} foi adicionado!`);
     } catch (error) {
@@ -180,10 +192,13 @@ export default function CardapioAluno() {
                 })()
               : "R$ 0,00"}
           </Text>
+
           <TouchableOpacity
             style={styles.btnReservar}
             onPress={() => {
               setSelectedPrato(item);
+              setSelectedDate(null);
+              setSelectedHour("");
               setModalVisible(true);
             }}
           >
@@ -212,12 +227,12 @@ export default function CardapioAluno() {
       <FlatList
         data={pratos}
         renderItem={renderItem}
-        keyExtractor={(item, index) => item.idItem || index.toString()}
+        keyExtractor={(item) => item.id}
         contentContainerStyle={{ padding: 16, paddingBottom: 100 }}
         ListHeaderComponent={<Header />}
       />
 
-      {/* Modal de Reserva */}
+      {/* 🔹 Modal de Reserva */}
       <Modal
         visible={modalVisible}
         transparent
@@ -227,17 +242,45 @@ export default function CardapioAluno() {
         <View style={styles.modalContainer}>
           <View style={styles.modalContent}>
             <Text style={styles.modalTitle}>
-              {`Escolha a data para ${selectedPrato?.nome ? String(selectedPrato.nome) : "o item"}`}
+              {`Escolha data e hora para ${selectedPrato?.nome ?? "a reserva"}`}
             </Text>
 
             <Calendar
               minDate={new Date().toISOString().split("T")[0]}
-              onDayPress={(day) => {
-                const dataEntrega = day.dateString;
-                salvarReserva(selectedPrato, dataEntrega);
-              }}
+              onDayPress={(day) => setSelectedDate(day.dateString)}
+              markedDates={
+                selectedDate
+                  ? { [selectedDate]: { selected: true, selectedColor: "#c1372d" } }
+                  : {}
+              }
               style={{ marginBottom: 20 }}
             />
+
+            <Text style={{ fontWeight: "bold", marginBottom: 6 }}>Horário:</Text>
+            <View style={styles.pickerContainer}>
+              <Picker
+                selectedValue={selectedHour}
+                onValueChange={(value) => setSelectedHour(value)}
+                style={{ height: 40, width: "100%" }}
+              >
+                <Picker.Item label="Selecione um horário" value="" />
+                <Picker.Item label="11:30" value="11:30" />
+                <Picker.Item label="12:00" value="12:00" />
+                <Picker.Item label="12:30" value="12:30" />
+                <Picker.Item label="13:00" value="13:00" />
+              </Picker>
+            </View>
+
+            <TouchableOpacity
+              style={[
+                styles.btnConfirmar,
+                { backgroundColor: selectedDate && selectedHour ? "#c1372d" : "#ccc" },
+              ]}
+              disabled={!selectedDate || !selectedHour}
+              onPress={() => salvarReserva(selectedPrato, selectedDate, selectedHour)}
+            >
+              <Text style={{ color: "#fff", fontWeight: "bold" }}>Confirmar Reserva</Text>
+            </TouchableOpacity>
 
             <TouchableOpacity
               style={styles.modalClose}
@@ -310,11 +353,31 @@ const styles = StyleSheet.create({
   },
   modalContent: {
     backgroundColor: "#fff",
-    width: "80%",
+    width: "85%",
     borderRadius: 12,
     padding: 20,
     alignItems: "center",
   },
   modalTitle: { fontSize: 18, fontWeight: "bold", marginBottom: 10 },
-  modalClose: { backgroundColor: "#c1372d", padding: 10, borderRadius: 10 },
+  pickerContainer: {
+    width: "100%",
+    borderWidth: 1,
+    borderColor: "#ccc",
+    borderRadius: 8,
+    marginBottom: 20,
+  },
+  btnConfirmar: {
+    padding: 10,
+    borderRadius: 10,
+    width: "100%",
+    alignItems: "center",
+    marginBottom: 10,
+  },
+  modalClose: {
+    backgroundColor: "#555",
+    padding: 10,
+    borderRadius: 10,
+    width: "100%",
+    alignItems: "center",
+  },
 });
